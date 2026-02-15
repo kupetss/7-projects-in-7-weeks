@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,13 +17,28 @@ type Stats struct {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Не указан путь к файлу или папке")
-		fmt.Println("Пример: go run main.go ./test.txt")
-		return
+	var (
+		linesFlag = flag.Bool("l", false, "")
+		wordsFlag = flag.Bool("w", false, "")
+		bytesFlag = flag.Bool("c", false, "")
+		fileFlag  = flag.String("file", "", "")
+	)
+
+	flag.Parse()
+
+	if !*linesFlag && !*wordsFlag && !*bytesFlag {
+		*linesFlag, *wordsFlag, *bytesFlag = true, true, true
 	}
 
-	path := os.Args[1]
+	path := *fileFlag
+	if path == "" && flag.NArg() > 0 {
+		path = flag.Arg(0)
+	}
+
+	if path == "" {
+		fmt.Println("Не указан путь к файлу или папке")
+		return
+	}
 
 	info, _ := os.Stat(path)
 
@@ -35,7 +51,7 @@ func main() {
 		results = append(results, stats)
 	}
 
-	ShowResults(results)
+	ShowResults(results, *linesFlag, *wordsFlag, *bytesFlag)
 }
 
 func folder(fPath string) []Stats {
@@ -87,7 +103,7 @@ func count(path string) Stats {
 	return stats
 }
 
-func ShowResults(results []Stats) {
+func ShowResults(results []Stats, showLines, showWords, showBytes bool) {
 	maxLen := 0
 	for _, item := range results {
 		if len(item.Name) > maxLen {
@@ -95,14 +111,31 @@ func ShowResults(results []Stats) {
 		}
 	}
 
-	fmt.Printf("%-*s | Строки | Слова | Байты\n", maxLen, "Файл")
-	fmt.Println(strings.Repeat("-", maxLen+30))
+	header := fmt.Sprintf("%-*s", maxLen, "Файл")
+	if showLines {
+		header += " | Строки"
+	}
+	if showWords {
+		header += " | Слова"
+	}
+	if showBytes {
+		header += " | Байты"
+	}
+	fmt.Println(header)
+
+	fmt.Println(strings.Repeat("-", len(header)))
+
 	for _, item := range results {
-		fmt.Printf("%-*s | %6d | %4d | %6d\n",
-			maxLen,
-			item.Name,
-			item.Lines,
-			item.Words,
-			item.Size)
+		line := fmt.Sprintf("%-*s", maxLen, item.Name)
+		if showLines {
+			line += fmt.Sprintf(" | %6d", item.Lines)
+		}
+		if showWords {
+			line += fmt.Sprintf(" | %4d", item.Words)
+		}
+		if showBytes {
+			line += fmt.Sprintf(" | %6d", item.Size)
+		}
+		fmt.Println(line)
 	}
 }
