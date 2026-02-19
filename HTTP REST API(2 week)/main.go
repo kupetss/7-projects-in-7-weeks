@@ -89,7 +89,28 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(tasks[found])
+	case http.MethodDelete:
+		if strings.HasSuffix(r.URL.Path, "/done") {
+			http.Error(w, "use del", http.StatusBadRequest)
+			return
+		}
+		idStr := strings.TrimPrefix(r.URL.Path, "/tasks")
+		idStr = strings.TrimPrefix(idStr, "/")
 
+		id, _ := strconv.Atoi(idStr)
+		found := -1
+		for i, task := range tasks {
+			if task.Id == id {
+				found = i
+				break
+			}
+		}
+		if found == -1 {
+			http.Error(w, "!", http.StatusNotFound)
+			return
+		}
+		tasks = append(tasks[:found], tasks[found+1:]...)
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "!", http.StatusMethodNotAllowed)
 	}
@@ -114,5 +135,5 @@ func IsNullOrEmpty(v interface{}) bool {
 
 func main() {
 	http.HandleFunc("/tasks/", tasksHandler)
-	http.ListenAndServe(":8081", nil)
+	http.ListenAndServe(":8080", nil)
 }
