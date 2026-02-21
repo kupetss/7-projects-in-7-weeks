@@ -3,9 +3,10 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"reflect"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Task struct {
@@ -14,32 +15,97 @@ type Task struct {
 	Done bool   `json:"done"`
 }
 
+type LogEntry struct {
+	Action    string    `json:"action"`
+	TaskId    int       `json:"task_id"`
+	TaskText  string    `json:"task_text"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 var (
 	tasks = []Task{
-		{Id: 1, Text: "By milk", Done: false},
+		{Id: 1, Text: "Buy milk", Done: false},
 	}
-	nextId   = 2
-	response map[string]interface{}
+	nextId  = 2
+	logFile = "tasks.log.json"
 )
 
+func logToFile(entry LogEntry) error {
+	file, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+
+	_, err = file.WriteString(string(data) + "\n")
+	return err
+}
+
+func readLogs() ([]LogEntry, error) {
+	file, err := os.Open(logFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []LogEntry{}, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	var logs []LogEntry
+	decoder := json.NewDecoder(file)
+	for {
+		var entry LogEntry
+		if err := decoder.Decode(&entry); err != nil {
+			break
+		}
+		logs = append(logs, entry)
+	}
+	return logs, nil
+}
+
 func tasksHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/tasks" && !strings.HasPrefix(r.URL.Path, "/tasks/") {
-		http.Error(w, "Not found", http.StatusNotFound)
+	path := strings.TrimRight(r.URL.Path, "/")
+
+	if path != "/tasks" && !strings.HasPrefix(path, "/task") {
+		http.Error(w, "!", http.StatusNotFound)
 		return
 	}
+
 	switch r.Method {
 	case http.MethodGet:
-		if r.URL.Path == "/tasks" || r.URL.Path == "/tasks/" {
+		if path == "/tasks" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(tasks)
-		} else {
-			http.Error(w, "!", http.StatusBadRequest)
+			return
 		}
+
+		if path == "/log" {
+			logs, err := readLogs()
+			if err != nil {
+				http.Error(w, "!", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(logs)
+			return
+		}
+
+		http.Error(w, "!", http.StatusBadRequest)
+
 	case http.MethodPost:
+		if path != "/task" {
+			http.Error(w, "!", http.StatusBadRequest)
+			return
+		}
+
 		var newTask Task
-		err := json.NewDecoder(r.Body).Decode(&newTask)
-		if err != nil {
-			http.Error(w, "Неверный формат JSON", http.StatusBadRequest)
+		if err := json.NewDecoder(r.Body).Decode(&newTask); err != nil {
+			http.Error(w, "!", http.StatusBadRequest)
 			return
 		}
 
@@ -50,90 +116,57 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 
 		newTask.Id = nextId
 		nextId++
+		newTask.Done = false
 		tasks = append(tasks, newTask)
+
+		logToFile(LogEntry{
+			Action:    "create",
+			TaskId:    newTask.Id,
+			TaskText:  newTask.Text,
+			Timestamp: time.Now(),
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-
 		json.NewEncoder(w).Encode(newTask)
-	case http.MethodPut:
-		path := r.URL.Path
-		if !strings.HasSuffix(path, "/done") {
-			http.Error(w, "Invalid path. Use /tasks/{id}/done", http.StatusBadRequest)
+
+	case http.MethodPatch:
+		if !strings.HasPrefix(path, "/task/") {
+			http.Error(w, "!", http.StatusBadRequest)
 			return
 		}
 
-		idStr := strings.TrimPrefix(path, "/tasks")
-		idStr = strings.TrimPrefix(idStr, "/")
-		idStr = strings.TrimSuffix(idStr, "/done")
-
+		idStr := strings.TrimPrefix(path, "/task/")
 		id, err := strconv.Atoi(idStr)
 		if err != nil {
 			http.Error(w, "!", http.StatusBadRequest)
 			return
 		}
 
-		found := -1
 		for i, task := range tasks {
 			if task.Id == id {
-				found = i
-				break
+				tasks[i].Done = !tasks[i].Done
+
+				logToFile(LogEntry{
+					Action:    "toggle",
+					TaskId:    task.Id,
+					TaskText:  task.Text,
+					Timestamp: time.Now(),
+				})
+
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(tasks[i])
+				return
 			}
 		}
-		if found == -1 {
-			http.Error(w, "!", http.StatusNotFound)
-			return
-		}
+		http.Error(w, "!", http.StatusNotFound)
 
-		tasks[found].Done = true
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(tasks[found])
-	case http.MethodDelete:
-		if strings.HasSuffix(r.URL.Path, "/done") {
-			http.Error(w, "use del", http.StatusBadRequest)
-			return
-		}
-		idStr := strings.TrimPrefix(r.URL.Path, "/tasks")
-		idStr = strings.TrimPrefix(idStr, "/")
-
-		id, _ := strconv.Atoi(idStr)
-		found := -1
-		for i, task := range tasks {
-			if task.Id == id {
-				found = i
-				break
-			}
-		}
-		if found == -1 {
-			http.Error(w, "!", http.StatusNotFound)
-			return
-		}
-		tasks = append(tasks[:found], tasks[found+1:]...)
-		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "!", http.StatusMethodNotAllowed)
 	}
 }
 
-func IsNullOrEmpty(v interface{}) bool {
-	if v == nil {
-		return true
-	}
-
-	switch val := v.(type) {
-	case string:
-		return val == ""
-	case []interface{}:
-		return len(val) == 0
-	case map[string]interface{}:
-		return len(val) == 0
-	default:
-		return reflect.ValueOf(val).IsZero()
-	}
-}
-
 func main() {
-	http.HandleFunc("/tasks/", tasksHandler)
+	http.HandleFunc("/", tasksHandler)
 	http.ListenAndServe(":8080", nil)
 }
