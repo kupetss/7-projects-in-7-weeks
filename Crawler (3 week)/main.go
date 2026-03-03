@@ -34,12 +34,7 @@ func fetchHTML(urlStr string) (*html.Node, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	doc, err := html.Parse(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	return doc, nil
+	return html.Parse(resp.Body)
 }
 
 func sameDomain(link *url.URL, base *url.URL) bool {
@@ -48,39 +43,51 @@ func sameDomain(link *url.URL, base *url.URL) bool {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("укажмте ссылку")
+		fmt.Println("Укажите ссылку")
 		os.Exit(1)
 	}
-
 	urlStr := os.Args[1]
-	url, _ := url.Parse(urlStr)
-
+	baseURL, _ := url.Parse(urlStr)
 	doc, err := fetchHTML(urlStr)
 	if err != nil {
 		fmt.Println("Ошибка загрузки страницы")
 		os.Exit(1)
 	}
-
 	links := Links(doc)
 	found := 0
-
+	ch := make(chan string, len(links))
 	for _, link := range links {
-		if link == "" {
-			continue
-		}
-
-		linkUrl, _ := url.Parse(link)
-
-		if linkUrl.Scheme == "http" || linkUrl.Scheme == "https" {
-			if sameDomain(linkUrl, url) {
-				fmt.Println(linkUrl.String())
-				found++
+		go func(link string) {
+			if link == "" {
+				ch <- ""
+				return
 			}
+			linkURL, err := url.Parse(link)
+			if err != nil {
+				ch <- ""
+				return
+			}
+			absoluteURL := baseURL.ResolveReference(linkURL)
+			if absoluteURL.Scheme == "http" || absoluteURL.Scheme == "https" {
+				if sameDomain(absoluteURL, baseURL) {
+					ch <- absoluteURL.String()
+					return
+				}
+			}
+			ch <- ""
+		}(link)
+	}
+
+	for i := 0; i < len(links); i++ {
+		if result := <-ch; result != "" {
+			fmt.Println(result)
+			found++
 		}
 	}
+	close(ch)
 
 	if found == 0 {
-		fmt.Println("ccылки не найдены")
+		fmt.Println("Ссылки не найдены")
 	}
-	fmt.Println("Всего ссылок: ", found)
+	fmt.Println("Всего ссылок:", found)
 }
